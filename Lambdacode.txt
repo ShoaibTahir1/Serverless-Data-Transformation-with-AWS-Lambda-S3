@@ -1,0 +1,90 @@
+import json
+import boto3
+import csv
+import io
+
+def lambda_handler(event, context):
+    try:
+        # Log the entire SQS event object for debugging purposes
+        print("Received Event:")
+        print(json.dumps(event, indent=2))
+        
+        # Loop through each SQS message (in case there are multiple messages in a single batch)
+        for record in event['Records']:
+            # The message body contains the S3 event
+            s3_event = json.loads(record['body'])  # Parse the SQS message body as JSON
+            
+            # Now extract S3 event information from the SQS message body
+            bucket = s3_event["Records"][0]["s3"]["bucket"]["name"]
+            key = s3_event["Records"][0]["s3"]["object"]["key"]
+            
+            print(f"Bucket: {bucket}, Key: {key}")
+            
+            # Ensure the bucket is eventdriven-st and the key exists
+            if bucket != 'eventdriven-st':
+                raise Exception(f"Invalid bucket: {bucket}. Expected 'eventdriven-st'.")
+
+            # Access the S3 object
+            s3_resource = boto3.resource('s3', region_name='us-east-1')  # Specify the region where your bucket is located
+            s3_object = s3_resource.Object(bucket, key)
+            
+            # Read the file content from the S3 object
+            data = s3_object.get()['Body'].read().decode('utf-8').splitlines()
+            
+            # Read the CSV file using csv.reader
+            lines = csv.reader(data)
+            headers = next(lines)
+            print('Headers: %s' % (headers))
+            
+            # Process CSV content
+            list_data = list(lines)
+            print('CSV Data: %s' % (list_data))
+            
+            india = []
+            us = []
+            # Process each row to sum the salary spend by country
+            for i in list_data:
+                if i[3] == 'India':  # Assuming the country is in the 4th column (index 3)
+                    india.append(int(i[2]))  # Assuming salary is in the 3rd column (index 2)
+                else:
+                    us.append(int(i[2]))
+            
+            print('Total India salary spend is:', sum(india))
+            print('Total US salary spend is:', sum(us))
+            print(f"Total salary spend: India = {sum(india)}, US = {sum(us)}")
+            
+            # Prepare CSV content with the aggregated data
+            output_content = [
+                ["Country", "Total Salary Spend"],
+                ["India", sum(india)],
+                ["US", sum(us)],
+            ]
+            
+            # Convert the result to CSV format
+            output_csv = io.StringIO()
+            csv_writer = csv.writer(output_csv)
+            csv_writer.writerows(output_content)
+            
+            # Reset the cursor of the StringIO object to the beginning
+            output_csv.seek(0)
+            
+            # Define the output path in the 'output' folder inside 'eventdriven-st' bucket
+            output_key = f"output/{key.split('/')[-1].replace('.csv', '_output.csv')}"
+            
+            # Save the result CSV to the 'output' folder in the S3 bucket
+            s3_client = boto3.client('s3', region_name='us-east-1')  # Specify your region here
+            s3_client.put_object(Body=output_csv.getvalue(), Bucket='eventdriven-st', Key=output_key)
+            print(f"Saved output to S3 at {output_key}")
+        
+        return {
+            'statusCode': 200,
+            'body': json.dumps('File processed successfully!')
+        }
+    
+    except Exception as e:
+        # Log the error and return a response with statusCode 500
+        print(f"Error: {str(e)}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps(f"Error: {str(e)}")
+        }
